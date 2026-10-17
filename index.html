@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bomba Patch 3D - Edição Definitiva</title>
+  
+  <!-- Apenas o Three.js é necessário. Física customizada implementada no código! -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body { background-color: #020617; color: #fff; font-family: 'Segoe UI', Roboto, sans-serif; overflow: hidden; }
+
+    /* HUD ESTILO PES / BOMBA PATCH */
+    #hud-top {
+      position: absolute; top: 20px; left: 40px; display: flex; align-items: stretch;
+      box-shadow: 0 8px 25px rgba(0,0,0,0.8); border: 2px solid rgba(255,255,255,0.15);
+      border-radius: 6px; z-index: 10;
+    }
+    .team-box {
+      padding: 6px 20px; font-size: 18px; font-weight: 900; letter-spacing: 1px;
+      display: flex; align-items: center; text-transform: uppercase;
+    }
+    .bg-red { background: linear-gradient(180deg, #dc2626, #991b1b); }
+    .bg-blue { background: linear-gradient(180deg, #2563eb, #1e3a8a); }
+    
+    .score-box {
+      background: #000; color: #facc15; font-family: 'Courier New', monospace; font-size: 28px;
+      font-weight: bold; padding: 4px 16px; display: flex; align-items: center;
+      border-left: 2px solid #333; border-right: 2px solid #333;
+    }
+    .time-box {
+      background: rgba(15, 23, 42, 0.9); color: #4ade80; font-family: monospace;
+      font-size: 20px; font-weight: bold; padding: 6px 16px; display: flex; align-items: center;
+    }
+
+    /* NARRAÇÃO E MENSAGENS */
+    #narrator {
+      position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.75); border: 1px solid rgba(255,255,255,0.2);
+      padding: 10px 30px; border-radius: 30px; font-size: 15px; font-weight: bold;
+      color: #f8fafc; z-index: 10; font-style: italic; box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    }
+
+    #goal-banner {
+      position: absolute; top: 35%; left: 50%; transform: translate(-50%, -50%) scale(0.1);
+      background: linear-gradient(90deg, #e11d48, #1d4ed8); padding: 30px 100px;
+      border: 4px solid #facc15; border-radius: 12px; color: #fff; font-size: 60px;
+      font-weight: 900; font-style: italic; text-shadow: 0 6px 15px rgba(0,0,0,0.8);
+      opacity: 0; transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); z-index: 20;
+    }
+    #goal-banner.show { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+
+    /* CONTROLES TÁTICOS */
+    #controls {
+      position: absolute; top: 90px; left: 40px; background: rgba(15,23,42,0.85);
+      backdrop-filter: blur(8px); border: 1px solid rgba(255,255,255,0.1);
+      padding: 15px; border-radius: 8px; display: flex; flex-direction: column; gap: 10px; z-index: 10;
+    }
+    #controls label { font-size: 11px; font-weight: 800; color: #94a3b8; text-transform: uppercase; }
+    select {
+      background: #0f172a; color: #f8fafc; border: 1px solid #334155; padding: 6px 10px;
+      border-radius: 4px; font-size: 12px; font-weight: bold; outline: none; cursor: pointer;
+    }
+    select:hover { border-color: #60a5fa; }
+
+    #webgl-canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+  </style>
+</head>
+<body>
+
+  <!-- Interface Gráfica -->
+  <div id="hud-top">
+    <div class="team-box bg-red">VERMELHO</div>
+    <div class="score-box"><span id="scoreRed">0</span>&nbsp;-&nbsp;<span id="scoreBlue">0</span></div>
+    <div class="team-box bg-blue">AZUL</div>
+    <div class="time-box" id="clock">00:00</div>
+  </div>
+
+  <div id="controls">
+    <label>Câmera de Transmissão</label>
+    <select id="camMode">
+      <option value="pes" selected>Grande Angular (Estilo PES)</option>
+      <option value="tv">Transmissão TV Close</option>
+      <option value="top">Visão Superior Tática</option>
+    </select>
+    <label style="margin-top: 5px;">Táticas</label>
+    <select id="formRed">
+      <option value="4-3-3" selected>Vermelho: 4-3-3 Ofensivo</option>
+      <option value="4-4-2">Vermelho: 4-4-2 Clássico</option>
+    </select>
+    <select id="formBlue">
+      <option value="4-3-3">Azul: 4-3-3 Ofensivo</option>
+      <option value="4-4-2" selected>Azul: 4-4-2 Clássico</option>
+    </select>
+  </div>
+
+  <div id="narrator">Bomba Patch: 100% Atualizado. Rola a bola!</div>
+  <div id="goal-banner">GOLAAAAÇO!</div>
+
+  <!-- Renderizador 3D -->
+  <div id="webgl-canvas"></div>
+
+  <script>
+    // ============================================================================
+    // 1. CONSTANTES E FORMAÇÕES
+    // ============================================================================
+    const PITCH_L = 105; 
+    const PITCH_W = 68;
+    const GOAL_W = 14; 
+    const GOAL_H = 4.5;
+
+    const FORMATIONS = {
+      '4-4-2': [
+        { role:'GK', x:-0.46, z:0 },
+        { role:'LB', x:-0.3, z:-0.35 }, { role:'CB', x:-0.34, z:-0.12 }, { role:'CB', x:-0.34, z:0.12 }, { role:'RB', x:-0.3, z:0.35 },
+        { role:'LM', x:-0.08, z:-0.35 }, { role:'CM', x:-0.12, z:-0.1 }, { role:'CM', x:-0.12, z:0.1 }, { role:'RM', x:-0.08, z:0.35 },
+        { role:'ST', x:0.18, z:-0.15 }, { role:'ST', x:0.18, z:0.15 }
+      ],
+      '4-3-3': [
+        { role:'GK', x:-0.46, z:0 },
+        { role:'LB', x:-0.3, z:-0.35 }, { role:'CB', x:-0.34, z:-0.12 }, { role:'CB', x:-0.34, z:0.12 }, { role:'RB', x:-0.3, z:0.35 },
+        { role:'DM', x:-0.18, z:0 }, { role:'CM', x:-0.05, z:-0.2 }, { role:'CM', x:-0.05, z:0.2 },
+        { role:'LW', x:0.25, z:-0.35 }, { role:'ST', x:0.28, z:0 }, { role:'RW', x:0.25, z:0.35 }
+      ]
+    };
+
+    // ============================================================================
+    // 2. CONFIGURAÇÃO GRÁFICA (THREE.JS) E ESTÁDIO
+    // ============================================================================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
+    scene.fog = new THREE.FogExp2(0x020617, 0.0035);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 1, 500);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.getElementById('webgl-canvas').appendChild(renderer.domElement);
+
+    // Iluminação
+    scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const sun = new THREE.DirectionalLight(0xfffaed, 0.85);
+    sun.position.set(40, 70, -30);
+    sun.castShadow = true;
+    sun.shadow.camera.left = -60; sun.shadow.camera.right = 60;
+    sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -40;
+    sun.shadow.mapSize.width = 2048; sun.shadow.mapSize.height = 2048;
+    scene.add(sun);
+
+    // Relvado Realista
+    function buildPitchTexture() {
+      const cv = document.createElement('canvas'); cv.width=2048; cv.height=1024;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#166534'; ctx.fillRect(0,0,2048,1024);
+      for(let i=0; i<16; i+=2) { ctx.fillStyle = '#15803d'; ctx.fillRect(i*128,0,128,1024); }
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 6;
+      ctx.strokeRect(60, 40, 1928, 944);
+      ctx.beginPath(); ctx.moveTo(1024,40); ctx.lineTo(1024,984); ctx.stroke();
+      ctx.beginPath(); ctx.arc(1024,512,140,0,Math.PI*2); ctx.stroke();
+      ctx.strokeRect(60,250,280,524); ctx.strokeRect(1708,250,280,524);
+      return new THREE.CanvasTexture(cv);
+    }
+    
+    const pitch = new THREE.Mesh(new THREE.PlaneGeometry(PITCH_L, PITCH_W), new THREE.MeshStandardMaterial({ map: buildPitchTexture(), roughness: 0.9 }));
+    pitch.rotation.x = -Math.PI/2; pitch.receiveShadow = true; scene.add(pitch);
+
+    // Placas de Publicidade e Borda Externa (Elimina Vazio Negro)
+    const apron = new THREE.Mesh(new THREE.PlaneGeometry(PITCH_L+60, PITCH_W+40), new THREE.MeshStandardMaterial({ color: 0x064e3b }));
+    apron.rotation.x = -Math.PI/2; apron.position.y = -0.1; scene.add(apron);
+
+    // Balizas
+    function createGoal(xPos) {
+      const gGroup = new THREE.Group();
+      const mat = new THREE.MeshStandardMaterial({color:0xffffff, roughness: 0.3});
+      const p1 = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,GOAL_H), mat); p1.position.set(0, GOAL_H/2, -GOAL_W/2); gGroup.add(p1);
+      const p2 = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,GOAL_H), mat); p2.position.set(0, GOAL_H/2, GOAL_W/2); gGroup.add(p2);
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.12,GOAL_W), mat); bar.rotation.x = Math.PI/2; bar.position.set(0, GOAL_H, 0); gGroup.add(bar);
+      
+      const net = new THREE.Mesh(new THREE.BoxGeometry(3, GOAL_H, GOAL_W), new THREE.MeshBasicMaterial({color:0xdddddd, wireframe:true, transparent:true, opacity:0.3}));
+      net.position.set(xPos > 0 ? 1.5 : -1.5, GOAL_H/2, 0); gGroup.add(net);
+      
+      gGroup.position.x = xPos; scene.add(gGroup);
+    }
+    createGoal(PITCH_L/2); createGoal(-PITCH_L/2);
+
+    // ============================================================================
+    // 3. FÍSICA CINEMÁTICA (BOLA) - 100% Robusta
+    // ============================================================================
+    class Ball {
+      constructor() {
+        this.radius = 0.42;
+        this.pos = new THREE.Vector3(0, this.radius, 0);
+        this.vel = new THREE.Vector3(0, 0, 0);
+        this.spin = 0; // Efeito de curva
+        
+        this.mesh = new THREE.Mesh(new THREE.SphereGeometry(this.radius, 24, 24), new THREE.MeshStandardMaterial({color: 0xffffff, roughness: 0.4}));
+        this.mesh.castShadow = true; scene.add(this.mesh);
+
+        this.shadow = new THREE.Mesh(new THREE.PlaneGeometry(1.2, 1.2), new THREE.MeshBasicMaterial({color: 0x000, transparent: true, opacity: 0.4, depthWrite: false}));
+        this.shadow.rotation.x = -Math.PI/2; scene.add(this.shadow);
+      }
+
+      reset(x, z) {
+        this.pos.set(x, this.radius, z);
+        this.vel.set(0, 0, 0);
+        this.spin = 0;
+      }
+
+      kick(dir, force, lift) {
+        this.vel.copy(dir).normalize().multiplyScalar(force);
+        this.vel.y = lift;
+        this.spin = (Math.random() - 0.5) * 0.05; // Pequena curva aleatória no ar
+      }
+
+      update() {
+        // Aplica física
+        this.pos.add(this.vel);
+        this.vel.y -= 0.02; // Gravidade
+        
+        if (this.pos.y > this.radius + 0.1) {
+          // No ar: aplica efeito Magnus (curva)
+          const lateral = new THREE.Vector3(-this.vel.z, 0, this.vel.x).normalize();
+          this.vel.add(lateral.multiplyScalar(this.spin));
+        }
+
+        // Quique na Grama
+        if (this.pos.y <= this.radius) {
+          this.pos.y = this.radius;
+          this.vel.y *= -0.55;
+          if (Math.abs(this.vel.y) < 0.1) this.vel.y = 0;
+          this.vel.x *= 0.98; // Atrito
+          this.vel.z *= 0.98;
+          this.spin *= 0.9;
+        } else {
+          this.vel.x *= 0.995; // Arrasto do ar
+          this.vel.z *= 0.995;
+        }
+
+        if (this.vel.lengthSq() < 0.0001) this.vel.set(0,0,0);
+
+        this.mesh.position.copy(this.pos);
+        this.mesh.rotation.x += this.vel.z * 0.3;
+        this.mesh.rotation.z -= this.vel.x * 0.3;
+
+        this.shadow.position.set(this.pos.x, 0.02, this.pos.z);
+        const sf = Math.max(0.2, 1 - (this.pos.y - this.radius) * 0.15);
+        this.shadow.scale.set(sf, sf, sf);
+      }
+    }
+
+    // ============================================================================
+    // 4. MODELO DO JOGADOR CINEMÁTICO (Evita deadlocks de física)
+    // ============================================================================
+    class Player {
+      constructor(team, num, role) {
+        this.team = team; this.num = num; this.role = role;
+        this.pos = new THREE.Vector3(); this.vel = new THREE.Vector3();
+        this.home = new THREE.Vector3();
+        
+        this.state = 'IDLE'; // IDLE, RUN, TACKLE, STUN
+        this.cooldown = 0;
+        this.speedLimit = role === 'GK' ? 0.25 : (0.35 + Math.random()*0.08);
+        this.animPhase = Math.random() * Math.PI;
+
+        this.buildRig();
+      }
+
+      buildRig() {
+        this.group = new THREE.Group();
+        const matShirt = new THREE.MeshStandardMaterial({color: this.role==='GK'?(this.team==='red'?0xf59e0b:0x8b5cf6):(this.team==='red'?0xdc2626:0x2563eb)});
+        const matSkin = new THREE.MeshStandardMaterial({color: 0xfca5a5});
+        const matShorts = new THREE.MeshStandardMaterial({color: 0xffffff});
+
+        this.pelvis = new THREE.Group(); this.pelvis.position.y = 1.0; this.group.add(this.pelvis);
+        
+        this.torso = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.8, 0.4), matShirt);
+        this.torso.position.y = 0.4; this.torso.castShadow = true; this.pelvis.add(this.torso);
+
+        this.head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 16,16), matSkin);
+        this.head.position.y = 1.0; this.head.castShadow = true; this.pelvis.add(this.head);
+
+        const buildLimb = (x, isArm) => {
+          const m = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.08,0.7), isArm ? matSkin : matShorts);
+          m.position.set(x, isArm ? 0.4 : -0.35, 0); m.castShadow = true;
+          this.pelvis.add(m); return m;
+        };
+        this.armL = buildLimb(-0.45, true); this.armR = buildLimb(0.45, true);
+        this.legL = buildLimb(-0.2, false); this.legR = buildLimb(0.2, false);
+
+        scene.add(this.group);
+      }
+
+      setSpawn(x, z) {
+        this.pos.set(x, 0, z); this.home.set(x, 0, z);
+        this.vel.set(0,0,0); this.group.position.copy(this.pos);
+      }
+
+      steer(targetPos, speedFactor) {
+        if(this.state === 'TACKLE' || this.state === 'STUN') return;
+        
+        const dir = targetPos.clone().sub(this.pos);
+        dir.y = 0;
+        if (dir.length() < 0.1) return;
+
+        dir.normalize().multiplyScalar(this.speedLimit * speedFactor);
+        this.vel.lerp(dir, 0.15); // Suavidade na mudança de direção
+      }
+
+      update() {
+        if(this.cooldown > 0) this.cooldown--;
+        if(this.cooldown <= 0) this.state = 'IDLE';
+
+        if(this.state === 'TACKLE') { this.pelvis.rotation.x = -1.2; this.pelvis.position.y = 0.3; this.vel.multiplyScalar(0.8); }
+        else if(this.state === 'STUN') { this.pelvis.rotation.z = 0.5; this.pelvis.position.y = 0.8; this.vel.multiplyScalar(0.8); }
+        else { this.pelvis.rotation.set(0,0,0); this.pelvis.position.y = 1.0; }
+
+        this.pos.add(this.vel);
+        this.vel.multiplyScalar(0.85); // Atrito corporal
+
+        // Respeita as 4 linhas
+        this.pos.x = Math.max(-PITCH_L/2 + 1, Math.min(PITCH_L/2 - 1, this.pos.x));
+        this.pos.z = Math.max(-PITCH_W/2 + 1, Math.min(PITCH_W/2 - 1, this.pos.z));
+
+        this.group.position.copy(this.pos);
+
+        const spd = this.vel.length();
+        if(spd > 0.02 && this.state === 'IDLE') {
+          this.group.rotation.y = Math.atan2(this.vel.x, this.vel.z);
+          this.animPhase += spd * 1.5;
+          const s = Math.sin(this.animPhase) * 0.8;
+          this.legL.rotation.x = -s; this.legR.rotation.x = s;
+          this.armL.rotation.x = s;  this.armR.rotation.x = -s;
+          this.torso.rotation.x = 0.15;
+        } else if (this.state === 'IDLE') {
+          this.legL.rotation.x = 0; this.legR.rotation.x = 0;
+          this.armL.rotation.x = 0; this.armR.rotation.x = 0;
+          this.torso.rotation.x = 0;
+        }
+      }
+    }
+
+    // ============================================================================
+    // 5. INTELIGÊNCIA ARTIFICIAL E LÓGICA DO JOGO
+    // ============================================================================
+    class MatchEngine {
+      constructor() {
+        this.ball = new Ball();
+        this.players = [];
+        this.state = 'KICKOFF';
+        this.timer = 0;
+        this.carrier = null;
+        this.score = { red:0, blue:0 };
+        this.possessionFrames = 0;
+        this.clock = 0;
+
+        for(let i=0; i<11; i++) this.players.push(new Player('red', i+1, FORMATIONS['4-3-3'][i].role));
+        for(let i=0; i<11; i++) this.players.push(new Player('blue', i+1, FORMATIONS['4-4-2'][i].role));
+        
+        this.applyTactics('4-3-3', '4-4-2');
+        this.resetField('red');
+      }
+
+      applyTactics(tRed, tBlue) {
+        const setT = (team, tName) => {
+          const form = FORMATIONS[tName];
+          this.players.filter(p => p.team===team).forEach((p, i) => {
+            p.role = form[i].role;
+            let px = form[i].x * PITCH_L; let pz = form[i].z * PITCH_W;
+            if(team==='blue') { px = -px; pz = -pz; }
+            p.home.set(px, 0, pz);
+          });
+        };
+        setT('red', tRed); setT('blue', tBlue);
+      }
+
+      resetField(kTeam) {
+        this.ball.reset(0,0);
+        this.carrier = null;
+        this.players.forEach(p => { p.setSpawn(p.home.x, p.home.z); p.state = 'IDLE'; p.cooldown = 0; });
+        const st = this.players.find(p => p.team === kTeam && p.role.includes('ST'));
+        if(st) st.setSpawn(kTeam==='red'?-1.5:1.5, 0);
+        this.state = 'KICKOFF'; this.timer = 50;
+      }
+
+      msg(text) { document.getElementById('narrator').innerText = text; }
+
+      update() {
+        this.ball.update();
+
+        // Evita colagem entre jogadores (Soft Collision Boids)
+        for (let i=0; i<this.players.length; i++) {
+          for (let j=i+1; j<this.players.length; j++) {
+            const p1 = this.players[i]; const p2 = this.players[j];
+            const dist = p1.pos.distanceTo(p2.pos);
+            if (dist > 0 && dist < 1.2) {
+              const push = p1.pos.clone().sub(p2.pos).normalize().multiplyScalar((1.2 - dist)*0.4);
+              p1.pos.add(push); p2.pos.sub(push);
+            }
+          }
+        }
+
+        if (this.state === 'KICKOFF') {
+          this.timer--;
+          if (this.timer <= 0) {
+            this.state = 'PLAYING';
+            this.msg("Rola a bola, autoriza o árbitro!");
+          }
+        } 
+        else if (this.state === 'PLAYING') {
+          this.clock += 0.02;
+          const mins = Math.floor(this.clock / 60); const secs = Math.floor(this.clock % 60);
+          document.getElementById('clock').innerText = `${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
+
+          // Descobre quem está mais perto
+          let cRed=null, cBlue=null, dRed=999, dBlue=999;
+          this.players.forEach(p => {
+            if(p.role==='GK') return;
+            const d = p.pos.distanceTo(this.ball.pos);
+            if(p.team==='red' && d<dRed) { dRed=d; cRed=p; }
+            if(p.team==='blue' && d<dBlue) { dBlue=d; cBlue=p; }
+          });
+
+          // Lógica Individual da IA
+          this.players.forEach(p => {
+            const isAtk = p.team === 'red';
+            const oppGoalX = isAtk ? PITCH_L/2 : -PITCH_L/2;
+
+            if (p.role === 'GK') {
+              const tz = Math.max(-GOAL_W/2+1, Math.min(GOAL_W/2-1, this.ball.pos.z * 0.4));
+              p.steer(new THREE.Vector3(isAtk ? -PITCH_L/2+2 : PITCH_L/2-2, 0, tz), 1.0);
+              
+              if (this.ball.pos.distanceTo(p.pos) < 3.5 && this.ball.vel.lengthSq() > 0.05 && p.cooldown <= 0) {
+                p.cooldown = 40; p.state = 'STUN';
+                this.ball.kick(new THREE.Vector3(isAtk?1:-1, 1, (Math.random()-0.5)).normalize(), 0.6, 0.4);
+                this.msg("Defesa espetacular do Goleiro!");
+              }
+            } 
+            else if (this.carrier === p) {
+              this.possessionFrames++;
+              
+              // Mantém bola no pé
+              const fwd = new THREE.Vector3(Math.sin(p.group.rotation.y), 0, Math.cos(p.group.rotation.y)).multiplyScalar(0.8);
+              this.ball.pos.set(p.pos.x + fwd.x, this.ball.radius, p.pos.z + fwd.z);
+              this.ball.vel.set(0,0,0);
+
+              const distGoal = Math.abs(p.pos.x - oppGoalX);
+              if (distGoal < 24) {
+                // CHUTE
+                this.carrier = null; p.cooldown = 20;
+                const aim = new THREE.Vector3(oppGoalX - p.pos.x, 0, (Math.random()-0.5)*5 - p.pos.z).normalize();
+                this.ball.kick(aim, 1.2, 0.2);
+                this.msg(`Remate forte de #${p.num}!`);
+              } else if (this.possessionFrames > 60) {
+                // PASSE
+                const mates = this.players.filter(m => m.team===p.team && m!==p && m.role!=='GK');
+                let best = null; let bScore = -999;
+                mates.forEach(m => {
+                  const d = p.pos.distanceTo(m.pos);
+                  if(d>5 && d<35) {
+                    const s = (isAtk ? m.pos.x : -m.pos.x) * 2 - d;
+                    if(s > bScore) { bScore=s; best=m; }
+                  }
+                });
+                this.carrier = null; p.cooldown = 20;
+                if(best) {
+                  const aim = best.pos.clone().sub(p.pos).normalize();
+                  this.ball.kick(aim, 0.85, 0.02);
+                  this.msg(`Tocou a bola #${p.num}.`);
+                } else {
+                  // Chutão
+                  this.ball.kick(new THREE.Vector3(isAtk?1:-1, 0, 0), 1.0, 0.3);
+                }
+              } else {
+                // CONDUÇÃO RUMO AO GOL
+                p.steer(new THREE.Vector3(oppGoalX, 0, 0), 0.8);
+              }
+            }
+            else if ((p === cRed || p === cBlue) && !this.carrier) {
+              // PERSEGUIR BOLA SOLTA
+              p.steer(this.ball.pos, 1.0);
+              if (p.pos.distanceTo(this.ball.pos) < 1.2 && p.cooldown <= 0) {
+                this.carrier = p; this.possessionFrames = 0;
+                this.msg(`Posse de bola para o ${p.team==='red'?'Vermelho':'Azul'}.`);
+              }
+            }
+            else if ((p === cRed || p === cBlue) && this.carrier && this.carrier.team !== p.team) {
+              // DAR O BOTE / DESARME
+              p.steer(this.carrier.pos, 1.0);
+              if (p.pos.distanceTo(this.carrier.pos) < 1.4 && p.cooldown <= 0) {
+                this.carrier.state = 'STUN'; this.carrier.cooldown = 35;
+                p.state = 'TACKLE'; p.cooldown = 25;
+                this.carrier = null;
+                const dir = new THREE.Vector3((Math.random()-0.5), 0, (Math.random()-0.5)).normalize();
+                this.ball.kick(dir, 0.5, 0.1);
+                this.msg(`Desarme limpo e na bola!`);
+              }
+            }
+            else {
+              // POSICIONAMENTO TÁTICO
+              let tg = p.home.clone();
+              if (this.carrier && this.carrier.team === p.team) {
+                if (p.role.includes('ST') || p.role.includes('W')) tg.x += isAtk ? 18 : -18;
+                else { tg.x += (this.carrier.pos.x - p.home.x)*0.4; tg.z += (this.carrier.pos.z - p.home.z)*0.3; }
+              } else {
+                tg.x += this.ball.pos.x * 0.3; tg.z += this.ball.pos.z * 0.15;
+              }
+              p.steer(tg, 0.7);
+            }
+
+            p.update();
+          });
+
+          // Regras: Golo ou Fora
+          const bx = this.ball.pos.x; const bz = this.ball.pos.z;
+          if (Math.abs(bx) > PITCH_L/2) {
+            if (Math.abs(bz) < GOAL_W/2 && this.ball.pos.y < GOAL_H) {
+              this.scoreGoal(bx > 0 ? 'red' : 'blue');
+            } else {
+              this.msg("Linha de fundo. Tiro de meta.");
+              this.ball.reset(Math.sign(bx)*(PITCH_L/2 - 5), 0);
+              this.carrier = null;
+            }
+          } else if (Math.abs(bz) > PITCH_W/2) {
+            this.msg("Lateral cobrado rapidamente.");
+            this.ball.reset(bx, Math.sign(bz)*(PITCH_W/2 - 2));
+            this.carrier = null;
+          }
+        }
+        else if (this.state === 'GOAL') {
+          this.timer--;
+          this.players.forEach(p => p.update());
+          if (this.timer <= 0) {
+            document.getElementById('goal-banner').classList.remove('show');
+            this.resetField(this.scorerTeam === 'red' ? 'blue' : 'red');
+          }
+        }
+      }
+
+      scoreGoal(team) {
+        this.score[team]++;
+        document.getElementById('scoreRed').innerText = this.score.red;
+        document.getElementById('scoreBlue').innerText = this.score.blue;
+        this.scorerTeam = team;
+        this.state = 'GOAL'; this.timer = 150;
+        document.getElementById('goal-banner').classList.add('show');
+        this.msg("GOLAÇO! Vibra a torcida!");
+      }
+    }
+
+    // ============================================================================
+    // 6. INICIALIZAÇÃO E LOOP PRINCIPAL
+    // ============================================================================
+    const engine = new MatchEngine();
+
+    document.getElementById('formRed').addEventListener('change', e => engine.applyTactics(e.target.value, document.getElementById('formBlue').value));
+    document.getElementById('formBlue').addEventListener('change', e => engine.applyTactics(document.getElementById('formRed').value, e.target.value));
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      engine.update();
+
+      const bPos = engine.ball.mesh.position;
+      const camMode = document.getElementById('camMode').value;
+      
+      // Câmera Suave Interpolada
+      if (engine.state === 'GOAL') {
+        camera.position.lerp(new THREE.Vector3(bPos.x, 15, bPos.z + 20), 0.05);
+        camera.lookAt(bPos);
+      } else if (camMode === 'pes') {
+        camera.position.lerp(new THREE.Vector3(bPos.x * 0.7, 32, 48), 0.05);
+        camera.lookAt(bPos.x * 0.8, 0, bPos.z * 0.3);
+      } else if (camMode === 'tv') {
+        camera.position.lerp(new THREE.Vector3(0, 42, 60), 0.05);
+        camera.lookAt(bPos);
+      } else {
+        camera.position.lerp(new THREE.Vector3(bPos.x, 80, 0), 0.05);
+        camera.lookAt(bPos.x, 0, 0);
+      }
+
+      renderer.render(scene, camera);
+    }
+    
+    animate();
+  </script>
+</body>
+</html>
